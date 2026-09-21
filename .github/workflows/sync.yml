@@ -1,0 +1,54 @@
+# Keep Formula/diavlos.rb in step with the latest Diavlos release.
+#
+# The release build generates a formula with the checksums of the binaries it
+# just signed and attaches it as `diavlos.rb`. This copies that file in, so
+# the formula is never written by hand and never carries a stale checksum.
+name: sync formula
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch the formula from the latest release
+        id: fetch
+        run: |
+          set -euo pipefail
+          url="https://github.com/harisnopen/diavlos/releases/latest/download/diavlos.rb"
+          if ! curl -fsSL "$url" -o /tmp/diavlos.rb; then
+            echo "no released formula yet; leaving the current one alone"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A formula is Ruby. Refuse anything that does not parse, rather
+          # than commit something that breaks every `brew install`.
+          ruby -c /tmp/diavlos.rb
+          grep -q "^class Diavlos < Formula" /tmp/diavlos.rb
+          if cmp -s /tmp/diavlos.rb Formula/diavlos.rb; then
+            echo "already current"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cp /tmp/diavlos.rb Formula/diavlos.rb
+          version=$(grep -oP '(?<=^  version ")[^"]+' Formula/diavlos.rb || echo "")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Commit
+        if: steps.fetch.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/diavlos.rb
+          git commit -m "diavlos ${{ steps.fetch.outputs.version }}"
+          git push
